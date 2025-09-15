@@ -222,3 +222,27 @@ const transform_wiki_link_on_parent = (node: Parent) => {
     }
     node.children = new_children;
 }
+
+export function get_md_tags_from_content(content: string, remove_tags_all: boolean): string[] {
+    const lines = content.split('\n');
+    const tags: string[] = [];
+    for (let i = 0; i < lines.length; i++) {
+        const row = lines[i];
+        const regex = /#([^\s#]+)/g;
+        let match;
+        while ((match = regex.exec(row)) != null) {
+            const tag = match[1];
+            if (!tags.contains(tag)) {
+                tags.push(tag);
+
+                if (remove_tags_all) {
+                    // remove tag from content
+                    const before_text = row.slice(0, match.index);
+                    const after_text = row.slice(match.index + match[0].length);
+                    lines[i] = before_text + after_text;
+                }
+            }
+        }
+    }
+    return tags;    
+}

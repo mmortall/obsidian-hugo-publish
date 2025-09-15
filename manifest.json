@@ -1,6 +1,6 @@
 {
-	"id": "hugo-publish",
-	"name": "Hugo Publish",
+	"id": "hugo-publish-mmortall",
+	"name": "Hugo Publish (mmortall fork)",
 	"version": "1.0.11",
 	"minAppVersion": "0.15.0",
 	"description": "Publish your blog to hugo site.",

@@ -1,5 +1,4 @@
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { App, Editor, FileSystemAdapter, MarkdownView, Modal, Notice, Plugin, parseYaml, stringifyYaml } from 'obsidian';
+import { App, FileSystemAdapter, Modal, Notice, Plugin, parseYaml, stringifyYaml } from 'obsidian';
 import { DEFAULT_SETTINGS, HugoPublishSettings, HugoPublishSettingTab, check_setting } from './setting';
 
 import * as util from "./util";
@@ -16,10 +15,35 @@ import { toMarkdown } from 'mdast-util-to-markdown'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTableFromMarkdown, gfmTableToMarkdown } from 'mdast-util-gfm-table'
 
+function ensureThumbnailKey(content: string, thumbnail_path: string): string {
+  // Матчим только самый первый блок frontmatter в начале файла
+  const fmRegex = /^---\n([\s\S]*?)\n---/;
 
-// Remember to rename these classes and interfaces!
+  if (fmRegex.test(content)) {
+    return content.replace(fmRegex, (match, inner) => {
+      // проверяем наличие thumbnail именно внутри frontmatter
+      if (/^thumbnail:/m.test(inner)) {
+        return `---\n${inner.replace(/^thumbnail:.*/m, `thumbnail: ${thumbnail_path}`)}\n---`;
+      } else {
+        return `---\n${inner}\thumbnail: ${thumbnail_path}\n---`;
+      }
+    });
+  } else {
+    // если frontmatter нет — создаём новый
+    return `---\thumbnail: ${thumbnail_path}\n---\n\n${content}`;
+  }
+}
 
 
+function removeTagLine(content: string, tags: string[]): string {
+  if (tags.length === 0) return content;
+
+  // Собираем regex вида "#sytrism\s+#fresco"
+  const pattern = tags.map(tag => `#${tag}`).join("\\s+");
+  const regex = new RegExp(`^\\s*${pattern}\\s*$`, "gm");
+
+  return content.replace(regex, "");
+}
 
 export default class HugoPublishPlugin extends Plugin {
 	settings: HugoPublishSettings;
@@ -122,10 +146,27 @@ export default class HugoPublishPlugin extends Plugin {
 
 		// Get excluded directories
 		const exclude_dirs = this.settings.get_exclude_dir().map(v => v.endsWith('/') ? v : v + '/');
+		const include_dirs = this.settings.get_include_dir().map(v => (v.endsWith('/') ? v : v + '/').trim());
 		console.debug('skip dirs:', exclude_dirs);
+		console.debug('include dirs:', include_dirs);
 
 		for (let i = 0; i < blogs.length; i++) {
 			const f = blogs[i];
+
+			// exclude files not in language dirs like ru, en, ...
+			if (include_dirs.length > 0) {
+				let is_include = false;
+				for (const dir of include_dirs) {
+					if (f.path.startsWith(dir)) {
+						is_include = true;
+						break;
+					}
+				}
+				if (!is_include) {
+					continue;
+				}
+			}
+
 			const content = await this.app.vault.read(f);
 			const stat = await this.app.vault.adapter.stat(f.path);
 
@@ -136,11 +177,22 @@ export default class HugoPublishPlugin extends Plugin {
 			}
 
 			let [header, body] = util.get_md_yaml_header_from_content(content)
+			const tags = util.get_md_tags_from_content(content, !this.settings.export_blog_tag);
+
+			// remove tags from md document since we will have them already in yaml
+			body = removeTagLine(body, tags);
+			const fist_post_image = getFirstImage(body);
+
+			const authorName = this.settings.author_name || this.app.metadataCache.getFileCache(f)?.frontmatter?.author;
+
 			let hv = parseYaml(header);
 			if (!hv) { hv = {}; }
 			if (hv) {
 				if (!("title" in hv)) {
-					hv["title"] = path.parse(f.name).name;
+					let title_from_filename = path.parse(f.name).name
+					title_from_filename = title_from_filename.replace(/\.[^.]+$/, ""); //remove language .en/.ru etc. at the end
+
+					hv["title"] = title_from_filename;
 				}
 				if (stat) {
 					const creat_at = new Date(stat?.ctime).toISOString();
@@ -152,14 +204,29 @@ export default class HugoPublishPlugin extends Plugin {
 					if (!("lastmod" in hv)) {
 						hv["lastmod"] = modify_at;
 					}
+					if (!("tags" in hv)) {
+						hv["tags"] = tags;
+					}
+					if (!("author" in hv)) {
+						hv["author"] = authorName ? authorName : "unknown";
+					}
+					if(fist_post_image && !("thumbnail" in hv)) {
+						//console.log("fist_post_image: ", fist_post_image);
+						hv["thumbnail"] = fist_post_image;
+					}
 				}
+
+				console.debug('tags:', tags);
+
 				if (!this.settings.export_blog_tag && this.settings.blog_tag.length > 0 && "tags" in hv) {
 					hv["tags"] = hv["tags"].filter((v: string) => v !== this.settings.blog_tag);
 				}
+
 			}
 
 			header = stringifyYaml(hv);
 
+			console.debug('header:', header);
 
 			//console.log("header\n", header, "body\n", body, "hv", hv);
 
@@ -279,5 +346,10 @@ class HugoPublishModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 	}
+}
+
+function getFirstImage(content: string): string | null {
+  const match = content.match(/!\[[^\]]*\]\(([^)]+)\)/);
+  return match ? match[1] : null;
 }
 
