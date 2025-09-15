@@ -15,26 +15,6 @@ import { toMarkdown } from 'mdast-util-to-markdown'
 import { gfmTable } from 'micromark-extension-gfm-table'
 import { gfmTableFromMarkdown, gfmTableToMarkdown } from 'mdast-util-gfm-table'
 
-function ensureThumbnailKey(content: string, thumbnail_path: string): string {
-  // Матчим только самый первый блок frontmatter в начале файла
-  const fmRegex = /^---\n([\s\S]*?)\n---/;
-
-  if (fmRegex.test(content)) {
-    return content.replace(fmRegex, (match, inner) => {
-      // проверяем наличие thumbnail именно внутри frontmatter
-      if (/^thumbnail:/m.test(inner)) {
-        return `---\n${inner.replace(/^thumbnail:.*/m, `thumbnail: ${thumbnail_path}`)}\n---`;
-      } else {
-        return `---\n${inner}\thumbnail: ${thumbnail_path}\n---`;
-      }
-    });
-  } else {
-    // если frontmatter нет — создаём новый
-    return `---\thumbnail: ${thumbnail_path}\n---\n\n${content}`;
-  }
-}
-
-
 function removeTagLine(content: string, tags: string[]): string {
   if (tags.length === 0) return content;
 
@@ -167,7 +147,7 @@ export default class HugoPublishPlugin extends Plugin {
 				}
 			}
 
-			const content = await this.app.vault.read(f);
+			let content = await this.app.vault.read(f);
 			const stat = await this.app.vault.adapter.stat(f.path);
 
 			// Check if the file is in an excluded directory
@@ -181,7 +161,7 @@ export default class HugoPublishPlugin extends Plugin {
 
 			// remove tags from md document since we will have them already in yaml
 			body = removeTagLine(body, tags);
-			const fist_post_image = getFirstImage(body);
+			let fist_post_image = getFirstImage(body);
 
 			const authorName = this.settings.author_name || this.app.metadataCache.getFileCache(f)?.frontmatter?.author;
 
@@ -211,7 +191,7 @@ export default class HugoPublishPlugin extends Plugin {
 						hv["author"] = authorName ? authorName : "unknown";
 					}
 					if(fist_post_image && !("thumbnail" in hv)) {
-						//console.log("fist_post_image: ", fist_post_image);
+						fist_post_image = fist_post_image.replace("../", "");
 						hv["thumbnail"] = fist_post_image;
 					}
 				}
@@ -246,7 +226,6 @@ export default class HugoPublishPlugin extends Plugin {
 			util.transform_wiki_image(ast);
 			util.transform_wiki_link(ast);
 			util.transform_better_latex(ast);
-
 
 			const meta = this.app.metadataCache.getFileCache(f);
 
@@ -316,6 +295,9 @@ export default class HugoPublishPlugin extends Plugin {
 				// body = remark.stringify(ast);
 				body = toMarkdown(ast, { extensions: [mathToMarkdown(), gfmTableToMarkdown()] });
 				//console.log(`write ${src} to ${dst}`);
+
+				body = normalizeImagePaths(body);
+
 				await util.write_md(dst, header, body)
 			}
 		}
@@ -353,3 +335,16 @@ function getFirstImage(content: string): string | null {
   return match ? match[1] : null;
 }
 
+function normalizeImagePaths(content: string): string {
+  return content.replace(/!\[[^\]]*\]\(([^)]+)\)/g, (match, p1) => {
+    let path = p1.trim();
+
+    // normalize: remove leading slash if path starts with "/attachments/"
+    if (path.startsWith("/attachments/")) {
+      path = path.substring(1);
+    }
+
+    // rebuild the markdown image string
+    return match.replace(p1, path);
+  });
+}
